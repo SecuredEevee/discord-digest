@@ -1,59 +1,125 @@
+<div align="center">
+
 # discord-digest
 
-디스코드 채널 메시지를 30분마다 REST API로 수집해 SQLite에 저장하고, LLM으로 요약해 마크다운(선택적으로 웹훅)으로 내보낸다.
+**Turn a busy Discord channel into a calm daily digest.**
 
-## 설치
+Fetch messages over the REST API, store them in SQLite, and let an LLM write
+periodic summaries and a daily digest as Markdown (optionally pushed to a webhook).
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)
+![Storage](https://img.shields.io/badge/storage-SQLite-003B57.svg)
+
+**English** · [한국어](README.ko.md)
+
+</div>
+
+---
+
+## Features
+
+- **Incremental fetching** — cursor-based pagination (100 per page) with an initial backfill window, transactional per channel so a failure rolls back and resumes from the same point.
+- **Resilient API client** — honors `429 retry_after` and rate-limit buckets, exponential backoff on 5xx/network errors, and skips only the affected channel on 401/403/404.
+- **Periodic + daily summaries** — periodic summaries once enough new messages accumulate; a daily digest after a configurable local hour. Leftover messages are folded into the next run, never dropped.
+- **Long-log friendly** — map-reduce chunking when the log exceeds `chunk_chars`.
+- **Pluggable LLM** — use the Anthropic API, or a logged-in `claude -p` (no API key needed). Swapping in another model means implementing one method.
+- **History backfill** — extend the stored history backwards without touching the cursor or duplicating rows.
+- **Safe to schedule** — `flock`-based single instance, rotating logs, secrets never logged.
+
+## Quick start
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt      # 테스트까지: requirements-dev.txt
-cp .env.example .env                           # DISCORD_BOT_TOKEN, ANTHROPIC_API_KEY 입력
+.venv/bin/pip install -r requirements.txt      # add requirements-dev.txt for tests
+cp .env.example .env                           # fill in DISCORD_BOT_TOKEN (+ ANTHROPIC_API_KEY for provider = "api")
+cp config.example.toml config.toml             # config.toml is git-ignored
 ```
 
-`config.toml`의 `[discord].channels`에 대상 채널 ID를 넣는다.
+Put the target channel ID(s) in `config.toml` under `[discord].channels`, then:
 
-### 봇 준비
-
-- Developer Portal → Bot → **Message Content Intent** 켜기 (꺼져 있으면 본문이 빈 문자열로 온다. 이 경우 로그에 경고가 남는다)
-- 대상 채널에 `View Channel`, `Read Message History` 권한
-- 개인 계정 토큰(셀프봇)은 디스코드 약관 위반이라 지원하지 않는다
-
-## 사용법
-
-```
-python -m digest run            # 수집 + 조건 충족 시 요약 (스케줄러가 호출)
-python -m digest fetch          # 수집만
-python -m digest summarize --channel <id> --since 2026-10-18T00:00
-python -m digest daily --force  # 일일 다이제스트 강제 생성
+```bash
+.venv/bin/python -m digest run
 ```
 
-- `--since`에 시간대가 없으면 `config.toml`의 `timezone` 기준으로 해석한다.
-- 모든 명령은 `data/digest.lock`에 `flock`을 건다. 다른 인스턴스가 실행 중이면 바로 종료한다. 프로세스가 죽으면 OS가 락을 풀기 때문에 stale lock이 남지 않는다.
+### Bot setup
 
-## 동작 요약
+- Developer Portal → Bot → enable **Message Content Intent** (otherwise message bodies arrive empty and a warning is logged).
+- Grant the bot `View Channel` and `Read Message History` on the target channel.
+- Self-bots (user account tokens) violate Discord's Terms of Service and are not supported.
 
-- **수집**: `cursors.last_id` 이후 메시지를 100개씩 페이지네이션. 최초 실행은 `backfill_hours` 전 시각의 snowflake부터. 채널별로 저장과 커서 갱신을 한 트랜잭션으로 묶어, 중간에 실패하면 롤백하고 다음 실행에서 같은 구간부터 다시 가져온다.
-- **레이트 리밋**: 429는 `retry_after`만큼 대기 후 재시도, `X-RateLimit-Remaining: 0`이면 `X-RateLimit-Reset-After`만큼 대기, 5xx/네트워크 오류는 지수 백오프(2·4·8초)로 최대 3회. 401/403/404는 해당 채널만 건너뛴다.
-- **주기 요약**: 마지막 주기 요약 이후 쌓인 메시지가 `min_messages` 이상일 때 생성. 미달인 회차의 메시지는 버리지 않고 다음 회차 요약에 합쳐진다.
-- **일일 다이제스트**: `daily_digest_hour` 이후 첫 실행에서, 그날(설정 시간대 기준) 다이제스트가 없으면 그날의 주기 요약 + 원문으로 생성. 웹훅이 설정돼 있으면 2000자 단위로 나눠 전송한다(멘션 비활성화). 그 시각부터 자정 사이에 한 번도 실행되지 않으면(예: 맥이 잠자기 상태) 그날 다이제스트는 만들어지지 않으므로, 다음 날 `daily --force`는 오늘 날짜로 생성된다는 점에 주의.
-- **청킹**: 입력이 `chunk_chars`를 넘으면 시간순으로 나눠 요약한 뒤 합친다(map-reduce).
-- **provider**: `[summary].provider` 로 `api`(기본, `ANTHROPIC_API_KEY` 필요) 또는 `claude_code`(로그인된 `claude -p` 사용, API 키 불필요)를 고른다. `claude_code`는 도구를 끄고 빈 임시 디렉터리에서 실행하며, 구독 사용량을 평소 Claude Code와 공유한다. cron/launchd에서는 `claude_path`를 절대경로로 지정한다.
-- **LLM 교체**: `digest/summarizer.py`의 `LLM` 프로토콜(`summarize(text: str) -> str`)만 구현하면 된다. 기본 구현은 `AnthropicLLM`이며, 거절(refusal) 시 서버측 fallback(`fallbacks="default"`)을 쓴다. Bedrock/Vertex 등 Claude API가 아닌 곳에서는 `fallback = false`로 둔다.
+## Commands
 
-## 출력
+| Command | What it does |
+| --- | --- |
+| `python -m digest run` | Fetch, then summarize when conditions are met. This is what your scheduler calls. |
+| `python -m digest fetch` | Fetch only. |
+| `python -m digest backfill --hours 96` | Fill history *before* the oldest stored message, back to *now − hours*. Existing rows and the cursor are untouched; safe to re-run. |
+| `python -m digest summarize --channel <id> --since 2026-10-18T00:00` | Manual summary of everything since a time. |
+| `python -m digest daily --force` | Force-generate the daily digest. |
+
+- `--since` without a timezone is interpreted in `config.toml`'s `timezone`.
+- Every command takes a `flock` on `data/digest.lock` and exits immediately if another instance is running. The OS releases the lock if the process dies, so there are no stale locks.
+
+## Configuration
+
+`config.toml`:
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `[discord].channels` | — | Channel ID or list of IDs. |
+| `[discord].backfill_hours` | `24` | How far back to fetch on the very first run. |
+| `[summary].min_messages` | `5` | Minimum new messages before a periodic summary is written. |
+| `[summary].daily_digest_hour` | `23` | Local hour after which the first run produces the daily digest. |
+| `[summary].timezone` | `Asia/Seoul` | Day boundaries, output paths, and `[HH:MM]` stamps. |
+| `[summary].provider` | `api` | `api` or `claude_code`. |
+| `[summary].claude_path` | `claude` | Path to the `claude` binary (`claude_code` only). Use an absolute path under cron/launchd. |
+| `[summary].model` | `claude-sonnet-5-5` | Model name. |
+| `[summary].effort` | `medium` | `low` · `medium` · `high` · `xhigh` · `max`. |
+| `[summary].fallback` | `true` | Server-side fallback on refusal (Claude API only). Set `false` on Bedrock/Vertex. |
+| `[summary].language` | `ko` | `ko`, `en`, or `ja`. |
+| `[summary].chunk_chars` | `60000` | Split into map-reduce chunks above this size. |
+| `[output].dir` | `output` | Where Markdown files go. |
+| `[output].webhook_url` | `""` | Optional. `DISCORD_WEBHOOK_URL` in `.env` takes precedence. |
+
+### LLM providers
+
+| Provider | Needs | Notes |
+| --- | --- | --- |
+| `api` | `ANTHROPIC_API_KEY` | Default. Uses server-side fallback on refusal. |
+| `claude_code` | A logged-in `claude` CLI | Runs `claude -p` with **all tools disabled** in an empty temp directory. Shares your subscription usage with regular Claude Code, so raise `min_messages` if the channel is busy. |
+
+To plug in another model, implement the `LLM` protocol in `digest/summarizer.py`:
+
+```python
+class LLM(Protocol):
+    def summarize(self, text: str) -> str: ...
+```
+
+## How it works
+
+1. **Fetch** — messages after `cursors.last_id`; the first run starts from a snowflake derived from `backfill_hours`. Storing messages and advancing the cursor happen in one transaction per channel.
+2. **Rate limits** — `429` waits `retry_after`; an exhausted bucket waits `X-RateLimit-Reset-After`; 5xx and network errors back off at 2/4/8 s for up to 3 retries.
+3. **Periodic summary** — written once `min_messages` have accumulated since the last one.
+4. **Daily digest** — on the first run after `daily_digest_hour`, built from that day's periodic summaries plus the raw log. With a webhook configured it is sent in 2000-character parts with mentions disabled. If no run happens between that hour and midnight (e.g. the Mac is asleep), that day's digest is skipped.
+5. **Chunking** — long inputs are summarized chronologically in chunks, then merged.
+
+## Output
 
 ```
-output/{channel_id}/{YYYY-MM-DD}/{HHMM}.md        # 주기 요약
-output/{channel_id}/{YYYY-MM-DD}/daily.md         # 일일 다이제스트
-output/{channel_id}/{YYYY-MM-DD}/manual-{HHMM}.md # summarize 명령
-logs/digest.log                                   # 5MB × 5 회전
+output/{channel_id}/{YYYY-MM-DD}/{HHMM}.md          # periodic summary
+output/{channel_id}/{YYYY-MM-DD}/daily.md           # daily digest
+output/{channel_id}/{YYYY-MM-DD}/manual-{HHMM}.md   # `summarize` command
+logs/digest.log                                     # rotating, 5 MB × 5
 ```
 
-## 스케줄링
+Each summary uses four sections: **Main topics**, **Decisions**, **Open questions**, **Shared links**.
 
-**cron (Linux)**
+## Scheduling
 
-```
+**cron**
+
+```cron
 */30 * * * * cd /path/to/discord-digest && .venv/bin/python -m digest run >> logs/cron.log 2>&1
 ```
 
@@ -68,19 +134,19 @@ logs/digest.log                                   # 5MB × 5 회전
     <string>com.user.discord-digest</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/YOU/Programming/Python/discord-digest/.venv/bin/python</string>
+        <string>/Users/YOU/path/to/discord-digest/.venv/bin/python</string>
         <string>-m</string>
         <string>digest</string>
         <string>run</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/YOU/Programming/Python/discord-digest</string>
+    <string>/Users/YOU/path/to/discord-digest</string>
     <key>StartInterval</key>
     <integer>1800</integer>
     <key>StandardOutPath</key>
-    <string>/Users/YOU/Programming/Python/discord-digest/logs/launchd.out.log</string>
+    <string>/Users/YOU/path/to/discord-digest/logs/launchd.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/YOU/Programming/Python/discord-digest/logs/launchd.err.log</string>
+    <string>/Users/YOU/path/to/discord-digest/logs/launchd.err.log</string>
 </dict>
 </plist>
 ```
@@ -90,10 +156,16 @@ mkdir -p logs
 launchctl load ~/Library/LaunchAgents/com.user.discord-digest.plist
 ```
 
-## 테스트
+> With `provider = "claude_code"`, the `claude` login may live in the macOS Keychain, which cron cannot always reach. If summaries fail with auth errors under cron, use launchd instead.
+
+## Testing
 
 ```bash
 .venv/bin/python -m pytest -q
 ```
 
-네트워크 없이 `httpx.MockTransport`와 가짜 LLM으로 완료 기준(백필, 증분 수집, 페이지네이션, 429, 실패 시 커서 유지, `min_messages`, 일일 1회, 동시 실행 방지, 토큰 비노출)을 검증한다.
+Runs fully offline with `httpx.MockTransport` and a fake LLM, covering backfill, incremental fetch, pagination, `429` handling, cursor retention on failure, `min_messages`, once-a-day digests, single-instance locking, and token non-disclosure.
+
+## License
+
+[MIT](LICENSE) © 2026 SecuredEevee
