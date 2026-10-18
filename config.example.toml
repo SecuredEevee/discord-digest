@@ -1,0 +1,19 @@
+[discord]
+channels = ["123456789012345678"]   # 대상 채널 ID (여러 개면 리스트)
+backfill_hours = 48          # 최초 실행 시 과거 몇 시간치 가져올지
+
+[summary]
+min_messages = 5             # 주기 요약을 만들 최소 신규 메시지 수
+daily_digest_hour = 23       # 이 시각(로컬) 이후 첫 실행에서 일일 다이제스트 생성
+timezone = "Asia/Seoul"      # 날짜 경계, 파일 경로, [HH:MM] 표기에 쓰는 시간대
+provider = "api"             # api(ANTHROPIC_API_KEY) | claude_code(로그인된 `claude -p`, 구독 한도 공유)
+claude_path = "claude"       # claude_code 전용. cron/launchd는 PATH가 짧아 절대경로 권장 (예: /Users/YOU/.local/bin/claude)
+model = "claude-haiku-5-5"
+effort = "medium"            # low | medium | high | xhigh | max
+fallback = true              # 거절(refusal) 시 서버측 fallback 모델로 재시도 (Claude API 전용)
+language = "ko"
+chunk_chars = 60000          # 입력이 이보다 길면 map-reduce로 나눠 요약
+
+[output]
+dir = "output"
+webhook_url = ""             # 비워두면 전송 안 함. .env의 DISCORD_WEBHOOK_URL이 우선
