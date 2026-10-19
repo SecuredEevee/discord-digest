@@ -8,7 +8,7 @@ import logging
 import sys
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -135,6 +135,16 @@ def cmd_daily(cfg: Config, conn, args) -> int:
     return 1 if errors else 0
 
 
+def cmd_export(cfg: Config, conn, args) -> int:
+    start = date.fromisoformat(args.date or args.since) if (args.date or args.since) else None
+    end = date.fromisoformat(args.date or args.until) if (args.date or args.until) else None
+    export_dir = args.out or cfg.base_dir / "export"
+    for channel_id in _channels(cfg, args.channel):
+        for path in pipeline.export_days(conn, cfg, channel_id, export_dir, start, end):
+            print(path)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m digest")
     parser.add_argument("--config", type=Path, help="config.toml 경로")
@@ -155,6 +165,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("daily", help="일일 다이제스트 생성")
     p.add_argument("--channel", help="특정 채널만")
     p.add_argument("--force", action="store_true", help="시각/중복 조건 무시하고 생성")
+
+    p = sub.add_parser("export", help="저장된 원문을 하루 단위 텍스트 파일로 내보내기 (기본: 전체 기간)")
+    p.add_argument("--channel", help="특정 채널만")
+    p.add_argument("--date", help="하루만. 예: 2026-10-18")
+    p.add_argument("--since", help="이 날짜부터 (포함)")
+    p.add_argument("--until", help="이 날짜까지 (포함)")
+    p.add_argument("--out", type=Path, help="출력 폴더 (기본: export/)")
     return parser
 
 
@@ -166,6 +183,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"설정 오류: {e}", file=sys.stderr)
         return 2
     setup_logging(cfg.log_dir)
+
+    if args.command == "export":
+        conn = storage.connect(cfg.db_path)
+        try:
+            return cmd_export(cfg, conn, args)
+        finally:
+            conn.close()
 
     try:
         with single_instance(cfg.lock_path):

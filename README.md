@@ -57,6 +57,7 @@ Put the target channel ID(s) in `config.toml` under `[discord].channels`, then:
 | `python -m digest backfill --hours 96` | Fill history *before* the oldest stored message, back to *now − hours*. Existing rows and the cursor are untouched; safe to re-run. |
 | `python -m digest summarize --channel <id> --since 2026-10-18T00:00` | Manual summary of everything since a time. |
 | `python -m digest daily --force` | Force-generate the daily digest. |
+| `python -m digest export [--date D \| --since D --until D]` | Write the full raw log as one text file per local day to `export/{channel_id}/{YYYY-MM-DD}.md` (no summaries). Handy for feeding a day into another LLM. Read-only; does not wait for the lock. |
 
 - `--since` without a timezone is interpreted in `config.toml`'s `timezone`.
 - Every command takes a `flock` on `data/digest.lock` and exits immediately if another instance is running. The OS releases the lock if the process dies, so there are no stale locks.

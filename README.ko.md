@@ -57,6 +57,7 @@ cp config.example.toml config.toml             # config.toml은 git에 올라가
 | `python -m digest backfill --hours 96` | 지금부터 96시간 전까지, 아직 안 받은 과거 구간만 채웁니다. 여러 번 실행해도 중복되지 않습니다. |
 | `python -m digest summarize --channel <id> --since 2026-10-18T00:00` | 지정한 시각 이후 대화를 바로 요약합니다. |
 | `python -m digest daily --force` | 일일 요약을 지금 바로 만듭니다. |
+| `python -m digest export [--date D \| --since D --until D]` | 저장된 원문 전체를 하루에 파일 하나씩 `export/{channel_id}/{YYYY-MM-DD}.md`로 내보냅니다. 요약은 들어가지 않습니다. 다른 LLM에 하루치 대화를 넘길 때 쓰기 좋습니다. 읽기만 하므로 다른 실행이 돌고 있어도 기다리지 않습니다. |
 
 - `--since`에 시간대를 안 붙이면 `config.toml`의 `timezone` 기준으로 봅니다.
 - 모든 명령은 실행 중에 `data/digest.lock`을 잡습니다. 이미 다른 실행이 돌고 있으면 바로 종료합니다. 프로세스가 비정상 종료돼도 락은 OS가 풀어 주니 따로 지울 필요는 없습니다.

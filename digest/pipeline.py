@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 
 from . import output, storage
 from .config import Config
 from .discord_api import DiscordClient, snowflake_from_datetime
-from .summarizer import LLM, format_messages, summarize_day, summarize_log
+from .summarizer import LLM, LOG_FORMAT_NOTE, format_messages, summarize_day, summarize_log
 
 log = logging.getLogger(__name__)
 
@@ -163,6 +164,55 @@ def day_bounds(day: date, cfg: Config) -> tuple[int, int]:
     start = datetime.combine(day, time(0), tzinfo=cfg.timezone)
     end = datetime.combine(day + timedelta(days=1), time(0), tzinfo=cfg.timezone)
     return snowflake_from_datetime(start), snowflake_from_datetime(end)
+
+
+def stored_day_range(conn: sqlite3.Connection, cfg: Config, channel_id: str) -> tuple[date, date] | None:
+    row = conn.execute(
+        "SELECT MIN(created_at) AS lo, MAX(created_at) AS hi FROM messages WHERE channel_id = ?",
+        (channel_id,),
+    ).fetchone()
+    if row["lo"] is None:
+        return None
+    to_day = lambda s: datetime.fromisoformat(s).astimezone(cfg.timezone).date()
+    return to_day(row["lo"]), to_day(row["hi"])
+
+
+def export_days(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    channel_id: str,
+    export_dir: Path,
+    start: date | None = None,
+    end: date | None = None,
+) -> list[Path]:
+    """하루 단위로 원문 전체를 텍스트로 내보낸다. 요약은 넣지 않는다."""
+    stored = stored_day_range(conn, cfg, channel_id)
+    if stored is None:
+        log.info("[%s] 저장된 메시지가 없습니다", channel_id)
+        return []
+    day = max(start or stored[0], stored[0])
+    last = min(end or stored[1], stored[1])
+
+    paths = []
+    while day <= last:
+        start_id, end_id = day_bounds(day, cfg)
+        rows = storage.messages_in_id_range(conn, channel_id, start_id - 1, end_id)
+        lines = [l for l in format_messages(rows, _reply_targets(conn, rows), cfg.timezone)
+                 if not l.startswith("--- ")]
+        if lines:
+            path = export_dir / channel_id / f"{day.isoformat()}.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            header = (
+                f"# 디스코드 채널 {channel_id} 대화 원문 — {day.isoformat()}\n\n"
+                f"- 기간: {_period(rows, cfg)}\n"
+                f"- 메시지 수: {len(lines)}\n"
+                f"- 형식: {LOG_FORMAT_NOTE.split(' `--- ')[0]}\n\n---\n\n"
+            )
+            path.write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
+            paths.append(path)
+            log.info("[%s] %s 내보냄: %s (메시지 %d개)", channel_id, day, path, len(lines))
+        day += timedelta(days=1)
+    return paths
 
 
 def maybe_daily(

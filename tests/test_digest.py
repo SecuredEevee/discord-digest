@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -307,3 +307,19 @@ def test_backfill_fills_only_before_oldest(conn):
         assert storage.get_cursor(conn, CHANNEL) == cursor
         assert pipeline.backfill_channel(conn, client, CHANNEL, 48, now=NOW) == 0
         assert count(conn) == 180
+
+
+def test_export_days_splits_by_local_day(conn, cfg, tmp_path):
+    kst = ZoneInfo("Asia/Seoul")
+    day1 = datetime(2026, 10, 17, 23, 59, tzinfo=kst)
+    day2 = datetime(2026, 10, 18, 0, 1, tzinfo=kst)
+    msgs = [make_msg(day1, 0), make_msg(day2, 1), make_msg(day2 + timedelta(minutes=5), 2, content="")]
+    storage.insert_messages(conn, [storage.message_row(m, CHANNEL) for m in msgs])
+    conn.commit()
+    paths = pipeline.export_days(conn, cfg, CHANNEL, tmp_path / "export")
+    assert [p.name for p in paths] == ["2026-10-17.md", "2026-10-18.md"]
+    text1, text2 = (p.read_text(encoding="utf-8") for p in paths)
+    assert "[23:59] Alice: message 0" in text1 and "message 1" not in text1
+    assert "[00:01] Alice: message 1" in text2 and "메시지 수: 1" in text2
+    only = pipeline.export_days(conn, cfg, CHANNEL, tmp_path / "x", date(2026, 10, 18), date(2026, 10, 18))
+    assert [p.name for p in only] == ["2026-10-18.md"]
