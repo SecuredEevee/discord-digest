@@ -59,7 +59,7 @@ def make_llm(cfg: Config):
     from .summarizer import AnthropicLLM, ClaudeCodeLLM
 
     if cfg.provider == "claude_code":
-        return ClaudeCodeLLM(cfg.model, effort=cfg.effort, claude_path=cfg.claude_path)
+        return ClaudeCodeLLM(cfg.model_chain, effort=cfg.effort, claude_path=cfg.claude_path)
     return AnthropicLLM(cfg.model, effort=cfg.effort, fallback=cfg.fallback)
 
 

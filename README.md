@@ -75,7 +75,7 @@ Put the target channel ID(s) in `config.toml` under `[discord].channels`, then:
 | `[summary].timezone` | `Asia/Seoul` | Day boundaries, output paths, and `[HH:MM]` stamps. |
 | `[summary].provider` | `api` | `api` or `claude_code`. |
 | `[summary].claude_path` | `claude` | Path to the `claude` binary (`claude_code` only). Use an absolute path under cron/launchd. |
-| `[summary].model` | `claude-sonnet-5-5` | Model name. |
+| `[summary].model` | `claude-sonnet-5-5` | Model name, or a list tried in order. With `claude_code`, a model that hits a safeguard flag or a 1M-context credit error is skipped for the rest of the run and the next one is used; other errors are retried on the same model. The model(s) actually used are recorded in each summary file. `api` uses the first entry. |
 | `[summary].effort` | `medium` | `low` · `medium` · `high` · `xhigh` · `max`. |
 | `[summary].fallback` | `true` | Server-side fallback on refusal (Claude API only). Set `false` on Bedrock/Vertex. |
 | `[summary].language` | `ko` | `ko`, `en`, or `ja`. |

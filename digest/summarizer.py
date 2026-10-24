@@ -94,13 +94,42 @@ class AnthropicLLM:
 class ClaudeCodeLLM:
     """`claude -p` 헤드리스 호출. API 키 없이 로그인된 구독 계정을 쓴다."""
 
-    def __init__(self, model: str, effort: str = "medium", claude_path: str = "claude", timeout: float = 600):
-        self._model = model
+    # 같은 입력을 같은 모델로 다시 보내도 결과가 같은 오류. 재시도 없이 다음 모델로 넘어간다.
+    MODEL_UNUSABLE_MARKERS = ("safeguards flagged", "Usage credits required for 1M context")
+
+    def __init__(
+        self,
+        models: str | Sequence[str],
+        effort: str = "medium",
+        claude_path: str = "claude",
+        timeout: float = 600,
+        sleep=time.sleep,
+    ):
+        self._models = [models] if isinstance(models, str) else list(models)
         self._effort = effort
         self._claude = claude_path
         self._timeout = timeout
+        self._sleep = sleep
+        self._skipped: set[str] = set()
+        self.used_models: list[str] = []
 
     def summarize(self, text: str) -> str:
+        candidates = [m for m in self._models if m not in self._skipped] or self._models[-1:]
+        last: SummaryError | None = None
+        for model in candidates:
+            try:
+                body = self._run(model, text)
+            except _ModelUnusable as e:
+                log.warning("%s 사용 불가, 다음 모델로 넘어갑니다: %s", model, str(e)[:160])
+                self._skipped.add(model)
+                last = SummaryError(str(e))
+                continue
+            if model not in self.used_models:
+                self.used_models.append(model)
+            return body
+        raise last or SummaryError("사용할 수 있는 모델이 없습니다")
+
+    def _run(self, model: str, text: str) -> str:
         import subprocess
         import tempfile
 
@@ -108,7 +137,7 @@ class ClaudeCodeLLM:
             self._claude, "-p",
             "--tools", "",
             "--system-prompt", SYSTEM_PROMPT,
-            "--model", self._model,
+            "--model", model,
             "--effort", self._effort,
             "--no-session-persistence",
             "--disable-slash-commands",
@@ -130,11 +159,18 @@ class ClaudeCodeLLM:
                 if r.returncode == 0 and body:
                     return body
                 detail = (r.stderr.strip() or body)[:500]
-                last = SummaryError(f"claude -p 실패 (exit={r.returncode}, 입력 {len(text)}자): {detail}")
+                msg = f"claude -p 실패 ({model}, exit={r.returncode}, 입력 {len(text)}자): {detail}"
+                if any(k in detail for k in self.MODEL_UNUSABLE_MARKERS):
+                    raise _ModelUnusable(msg)
+                last = SummaryError(msg)
             log.warning("%s (시도 %d/3)", last, attempt)
             if attempt < 3:
-                time.sleep(5 * attempt)
+                self._sleep(5 * attempt)
         raise last
+
+
+class _ModelUnusable(Exception):
+    pass
 
 
 def _flatten(text: str) -> str:

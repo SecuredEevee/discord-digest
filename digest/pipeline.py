@@ -92,6 +92,16 @@ def _reply_targets(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> dict[st
     return storage.get_messages(conn, ids)
 
 
+def _reset_models(llm: LLM) -> None:
+    if hasattr(llm, "used_models"):
+        llm.used_models.clear()
+
+
+def _models_meta(llm: LLM) -> dict[str, str]:
+    used = getattr(llm, "used_models", None)
+    return {"모델": ", ".join(used)} if used else {}
+
+
 def _period(rows: list[sqlite3.Row], cfg: Config) -> str:
     fmt = "%Y-%m-%d %H:%M"
     first = datetime.fromisoformat(rows[0]["created_at"]).astimezone(cfg.timezone)
@@ -110,6 +120,7 @@ def _summarize_rows(
     now: datetime,
 ) -> str:
     lines = format_messages(rows, _reply_targets(conn, rows), cfg.timezone)
+    _reset_models(llm)
     body = summarize_log(llm, lines, cfg.chunk_chars, cfg.language) if lines else "요약할 본문이 없습니다."
     local_now = now.astimezone(cfg.timezone)
     path = output.periodic_path(
@@ -118,7 +129,7 @@ def _summarize_rows(
     output.write_markdown(
         path,
         title,
-        {"채널 ID": channel_id, "기간": _period(rows, cfg), "메시지 수": str(len(rows))},
+        {"채널 ID": channel_id, "기간": _period(rows, cfg), "메시지 수": str(len(rows)), **_models_meta(llm)},
         body,
     )
     storage.insert_summary(conn, channel_id, kind, rows[0]["id"], rows[-1]["id"], len(rows), body)
@@ -241,10 +252,11 @@ def maybe_daily(
         s["body"] for s in storage.summaries_in_id_range(conn, channel_id, "periodic", start_id, end_id)
     ]
     lines = format_messages(rows, _reply_targets(conn, rows), cfg.timezone)
+    _reset_models(llm)
     body = summarize_day(llm, day.isoformat(), periodic, lines, cfg.chunk_chars, cfg.language)
 
     path = output.daily_path(cfg.output_dir, channel_id, day)
-    meta = {"채널 ID": channel_id, "기간": _period(rows, cfg), "메시지 수": str(len(rows))}
+    meta = {"채널 ID": channel_id, "기간": _period(rows, cfg), "메시지 수": str(len(rows)), **_models_meta(llm)}
     output.write_markdown(path, f"일일 다이제스트 — {day}", meta, body)
     storage.insert_summary(conn, channel_id, "daily", str(start_id), str(end_id), len(rows), body)
     conn.commit()

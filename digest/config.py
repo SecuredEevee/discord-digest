@@ -34,6 +34,11 @@ class Config:
     webhook_url: str
     provider: str = "api"
     claude_path: str = "claude"
+    models: tuple[str, ...] = ()
+
+    @property
+    def model_chain(self) -> tuple[str, ...]:
+        return self.models or (self.model,)
 
     @property
     def data_dir(self) -> Path:
@@ -80,6 +85,11 @@ def load_config(path: Path | None = None, base_dir: Path = BASE_DIR) -> Config:
     if provider not in ("api", "claude_code"):
         raise ConfigError(f"[summary].provider 는 'api' 또는 'claude_code' 여야 합니다: {provider!r}")
 
+    model = summary.get("model", "claude-sonnet-5-5")
+    models = (model,) if isinstance(model, str) else tuple(str(m) for m in model)
+    if not models:
+        raise ConfigError("[summary].model 이 비어 있습니다")
+
     return Config(
         base_dir=base_dir,
         channels=channels,
@@ -87,7 +97,8 @@ def load_config(path: Path | None = None, base_dir: Path = BASE_DIR) -> Config:
         min_messages=int(summary.get("min_messages", 5)),
         daily_digest_hour=int(summary.get("daily_digest_hour", 23)),
         timezone=ZoneInfo(summary.get("timezone", "Asia/Seoul")),
-        model=summary.get("model", "claude-sonnet-5-5"),
+        model=models[0],
+        models=models,
         effort=summary.get("effort", "medium"),
         fallback=bool(summary.get("fallback", True)),
         language=summary.get("language", "ko"),

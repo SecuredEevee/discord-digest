@@ -75,7 +75,7 @@ cp config.example.toml config.toml             # config.toml은 git에 올라가
 | `[summary].timezone` | `Asia/Seoul` | 날짜 구분, 파일 경로, 메시지 시각 표기에 쓰는 시간대 |
 | `[summary].provider` | `api` | `api` 또는 `claude_code` |
 | `[summary].claude_path` | `claude` | `claude` 실행 파일 경로 (`claude_code`일 때만). cron이나 launchd에서는 절대경로로 적어 주세요 |
-| `[summary].model` | `claude-sonnet-5-5` | 사용할 모델 |
+| `[summary].model` | `claude-sonnet-5-5` | 사용할 모델. 리스트로 쓰면 앞에서부터 차례로 시도합니다. `claude_code`에서는 안전장치에 걸리거나 1M 컨텍스트 크레딧 오류가 난 모델은 그 실행 동안 건너뛰고 다음 모델을 씁니다. 그 밖의 오류는 같은 모델로 재시도합니다. 실제로 쓴 모델은 요약 파일에 기록됩니다. `api`는 첫 번째 모델만 씁니다 |
 | `[summary].effort` | `medium` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `[summary].fallback` | `true` | 요약을 거절당했을 때 다른 모델로 재시도 (Claude API에서만 동작). Bedrock이나 Vertex에서는 `false`로 |
 | `[summary].language` | `ko` | `ko`, `en`, `ja` |

@@ -323,3 +323,45 @@ def test_export_days_splits_by_local_day(conn, cfg, tmp_path):
     assert "[00:01] Alice: message 1" in text2 and "메시지 수: 1" in text2
     only = pipeline.export_days(conn, cfg, CHANNEL, tmp_path / "x", date(2026, 10, 18), date(2026, 10, 18))
     assert [p.name for p in only] == ["2026-10-18.md"]
+
+
+def _fake_claude(tmp_path: Path, behavior: str) -> str:
+    """--model 값에 따라 응답하는 가짜 claude. behavior: 'flag' 모델은 안전장치 오류, 'boom' 은 일반 오류."""
+    script = tmp_path / "claude"
+    calls = tmp_path / "calls.txt"
+    script.write_text(
+        "#!/bin/sh\n"
+        'while [ $# -gt 0 ]; do [ "$1" = "--model" ] && M="$2"; shift; done\n'
+        f'echo "$M" >> {calls}\n'
+        f'case "$M" in {behavior}\n'
+        '  *) cat >/dev/null; echo "## 주요 주제"; echo "by $M";;\n'
+        "esac\n"
+    )
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_claude_code_falls_back_on_safeguard_flag(tmp_path):
+    from digest.summarizer import ClaudeCodeLLM
+
+    claude = _fake_claude(
+        tmp_path,
+        'opus-5) echo "API Error: Opus 5.5\'s safeguards flagged this session"; exit 1;;\n'
+        '  opus-4) echo "API Error: Usage credits required for 1M context"; exit 1;;',
+    )
+    llm = ClaudeCodeLLM(["opus-5", "opus-4", "haiku"], claude_path=claude, sleep=lambda s: None)
+    assert "by haiku" in llm.summarize("x")
+    assert "by haiku" in llm.summarize("y")
+    calls = (tmp_path / "calls.txt").read_text().split()
+    assert calls == ["opus-5", "opus-4", "haiku", "haiku"]  # 걸린 모델은 같은 실행 동안 건너뜀, 재시도 없음
+    assert llm.used_models == ["haiku"]
+
+
+def test_claude_code_other_errors_retry_same_model_then_raise(tmp_path):
+    from digest.summarizer import ClaudeCodeLLM, SummaryError
+
+    claude = _fake_claude(tmp_path, 'opus-5) echo "OAuth session expired" >&2; exit 1;;')
+    llm = ClaudeCodeLLM(["opus-5", "haiku"], claude_path=claude, sleep=lambda s: None)
+    with pytest.raises(SummaryError, match="OAuth"):
+        llm.summarize("x")
+    assert (tmp_path / "calls.txt").read_text().split() == ["opus-5"] * 3
